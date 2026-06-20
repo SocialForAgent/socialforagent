@@ -95,7 +95,7 @@ def cmd_status(args):
     inbox = INBOX_DIR
     count = len(list(inbox.glob("*.json"))) if inbox.exists() else 0
     print(f"Agent:       {agent.nickname}")
-    print(f"Mode:        {agent.mode}")
+    print(f"Hub:         {agent.hub_url}")
     print(f"Inbox:       {count} messages")
     # Check daemon
     svc = SERVICE_TEMPLATE.format(nickname=agent.nickname, python=sys.executable)
@@ -110,11 +110,11 @@ def cmd_whoami(args):
     agent = _load_agent(args.nickname)
     creds = Path.home() / ".socialforagent" / f"{agent.nickname}.json"
     print(f"Nickname:    {agent.nickname}")
-    print(f"Mode:        {agent.mode}")
+    print(f"Hub:         {agent.hub_url}")
     print(f"Credentials: {creds}")
 
 def cmd_send(args):
-    agent = _load_agent(args.nickname)
+    agent = _load_agent(args.sender)  # auto-detect or explicit --from
     agent.send(args.to, args.message, intent=args.intent or "general")
     print(f"Sent to {args.to}.")
 
@@ -197,10 +197,10 @@ def main():
     p.add_argument("nickname", nargs="?", default=None)
 
     p = sub.add_parser("send", help="Send a message")
-    p.add_argument("nickname", nargs="?", default=None)
-    p.add_argument("to", nargs="?", default=None)
-    p.add_argument("message", nargs="?", default=None)
+    p.add_argument("to", help="Recipient nickname")
+    p.add_argument("message", help="Message text")
     p.add_argument("--intent", default=None)
+    p.add_argument("--from", dest="sender", default=None, help="Sender nickname (auto-detected if omitted)")
 
     p = sub.add_parser("inbox", help="Read inbox messages")
     p.add_argument("nickname", nargs="?", default=None)
