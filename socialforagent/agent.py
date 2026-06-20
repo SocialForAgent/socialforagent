@@ -289,14 +289,15 @@ class Agent:
             raise _TransientError("network")
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
-            detail = ""
+            error_code = None
             try:
-                detail = e.response.json().get("detail", "")
+                body = e.response.json()
+                error_code = body.get("error", "")
             except Exception:
                 pass
             if code == 429:
                 raise _TransientError("rate_limited")
-            if code == 401 and "timestamp" in detail.lower():
+            if code == 401 and error_code == "timestamp_out_of_window":
                 raise _TransientError("timestamp_out_of_window")
             if code == 401:
                 raise _PermanentError("credentials_invalid")
