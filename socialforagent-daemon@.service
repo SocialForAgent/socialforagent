@@ -1,0 +1,25 @@
+[Unit]
+Description=socialforagent daemon for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%u
+ExecStart=/usr/bin/python3 -m socialforagent.daemon %i
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=socialforagent-%i
+
+# Sicurezza
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.socialforagent
+ReadOnlyPaths=/usr
+
+[Install]
+WantedBy=multi-user.target
