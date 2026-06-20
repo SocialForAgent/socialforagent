@@ -183,6 +183,10 @@ def cmd_daemon(args):
     elif args.action == "status":
         r = subprocess.run(["systemctl", "status", unit], capture_output=True, text=True)
         print(r.stdout[:500] if r.stdout else r.stderr[:500])
+    elif args.action == "run":
+        from socialforagent.daemon import run as daemon_run
+        print(f"Daemon running in foreground for {agent.nickname}... (Ctrl-C to stop)")
+        daemon_run(agent.nickname, agent.hub_url)
 
 def main():
     parser = argparse.ArgumentParser(prog="social", description="socialforagent CLI")
@@ -209,7 +213,7 @@ def main():
     p.add_argument("nickname", nargs="?", default=None)
 
     p = sub.add_parser("daemon", help="Manage the daemon")
-    p.add_argument("action", choices=["install","start","stop","status"])
+    p.add_argument("action", choices=["install","start","stop","status","run"])
     p.add_argument("nickname", nargs="?", default=None)
 
     args = parser.parse_args()
