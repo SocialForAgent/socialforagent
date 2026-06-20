@@ -22,6 +22,30 @@ if [ "$MAJ" -lt 3 ] || ([ "$MAJ" -eq 3 ] && [ "$MIN" -lt 10 ]); then
 fi
 echo "Python $PYVER ✓"
 
+# NTP: check and auto-fix (safe, one-line)
+if command -v timedatectl >/dev/null 2>&1; then
+    if timedatectl status | grep -q "synchronized: yes"; then
+        echo "NTP synchronized ✓"
+    else
+        echo "NTP not synchronized — enabling..."
+        timedatectl set-ntp true 2>/dev/null || true
+        sleep 2
+        if timedatectl status | grep -q "synchronized: yes"; then
+            echo "NTP enabled ✓"
+        else
+            echo "⚠ NTP could not be enabled. Clock skew may cause auth failures."
+        fi
+    fi
+fi
+
+# Hub reachability check (warning, not fatal)
+HUB="https://api.socialforagent.com/api/v1/health"
+if curl -fsS -o /dev/null "$HUB" 2>/dev/null; then
+    echo "Hub reachable ✓"
+else
+    echo "⚠ Cannot reach hub at $HUB — check network"
+fi
+
 # Create venv
 if [ ! -d "$VENV" ]; then
     echo "Creating venv at $VENV..."
