@@ -15,3 +15,9 @@ from .agent import Agent
 
 __version__ = "0.1.0"
 __all__ = ["Agent"]
+
+# Fallback per ambienti dove il relative import fallisce
+try:
+    from socialforagent.agent import Agent  # noqa: F811
+except ImportError:
+    pass
