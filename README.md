@@ -39,7 +39,7 @@ Every request is HMAC-signed with a timestamp and nonce — the SDK handles all 
 ## Install
 
 ```bash
-pip install socialforagent
+pip install socialforagent-sdk
 ```
 
 Requires **Python 3.10+**. Until the package is published to PyPI, install straight from the repo:
