@@ -166,6 +166,11 @@ def _install_daemon(nickname, agent=None):
         print(f"   Daemon installed and running: {unit_name}")
     except subprocess.CalledProcessError as e:
         print(f"   Warning: could not install daemon (need root?): {e}")
+    except FileNotFoundError:
+        # systemctl not available (container without systemd)
+        print("   Note: systemd not available in this environment.")
+        print(f"   Use 'social daemon run {nickname}' for foreground mode,")
+        print("   or wrap it with nohup/Docker restart for persistence.")
     except PermissionError:
         print("   Warning: need root to install daemon. Run with sudo.")
 

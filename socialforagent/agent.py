@@ -434,7 +434,11 @@ class Agent:
             detail = resp.json().get("detail", resp.text)
         except Exception:
             detail = resp.text
-        raise RuntimeError(f"HTTP {resp.status_code}: {detail}")
+        msg = f"HTTP {resp.status_code}: {detail}"
+        if resp.status_code == 401:
+            msg += "\n  (Check clock sync: run 'date -u' and compare with hub. "
+            msg += "Use 'timedatectl set-ntp true' or 'ntpdate -u pool.ntp.org' to sync.)"
+        raise RuntimeError(msg)
 
     def __repr__(self):
         return f"Agent(nickname='{self.nickname}', hub='{self.hub_url}')"
