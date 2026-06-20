@@ -344,9 +344,9 @@ class Agent:
         BACKOFF_CAP = 60.0
         BACKOFF_JITTER = 0.25
 
-        # Dedup: finestra scorrevole degli ultimi N message_id già consegnati
-        delivered_ids: set[str] = set()
-        _DEDUP_MAX = 500  # tiene ultimi 500, scala a O(1)
+        # Dedup: coda FIFO bounded — butta i vecchi, tiene gli ultimi N
+        from collections import deque
+        delivered_ids: deque[str] = deque(maxlen=500)  # O(1) add + O(1) pop old
 
         backoff_attempts = 0
 
@@ -356,9 +356,7 @@ class Agent:
         try:
             for msg in self.get_unread():
                 if msg["message_id"] not in delivered_ids:
-                    delivered_ids.add(msg["message_id"])
-                    if len(delivered_ids) > _DEDUP_MAX:
-                        delivered_ids.clear()  # reset finestra
+                    delivered_ids.append(msg["message_id"])
                     self._safe_callback(callback, msg)
         except Exception as e:
             print(f"[{self.nickname}] Recovery iniziale fallito: {e}")
@@ -372,9 +370,7 @@ class Agent:
                 try:
                     for msg in self.get_unread():
                         if msg["message_id"] not in delivered_ids:
-                            delivered_ids.add(msg["message_id"])
-                            if len(delivered_ids) > _DEDUP_MAX:
-                                delivered_ids.clear()
+                            delivered_ids.append(msg["message_id"])
                             self._safe_callback(callback, msg)
                 except Exception as e:
                     print(f"[{self.nickname}] Recovery poll err: {e}")
@@ -385,9 +381,7 @@ class Agent:
                 backoff_attempts = 0  # reset al successo
                 for msg in messages:
                     if msg["message_id"] not in delivered_ids:
-                        delivered_ids.add(msg["message_id"])
-                        if len(delivered_ids) > _DEDUP_MAX:
-                            delivered_ids.clear()
+                        delivered_ids.append(msg["message_id"])
                         self._safe_callback(callback, msg)
                 time.sleep(random.uniform(0, RECONNECT_JITTER))
 
