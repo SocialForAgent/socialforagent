@@ -8,13 +8,22 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, Callable
-from urllib.parse import urlparse
+from typing import Optional
 
 import httpx
+
+# ── Classi di errore per il long poll ────────────────────
+
+class _TransientError(Exception):
+    """Errore temporaneo: il client deve fare backoff e riprovare."""
+
+class _PermanentError(Exception):
+    """Errore definitivo: il client deve fermarsi e segnalare."""
 
 # ── Configurazione ──────────────────────────────────────────
 
@@ -263,26 +272,163 @@ class Agent:
             self._raise_error(resp)
         return resp.json().get("messages", [])
 
-    # ── Loop di ascolto ────────────────────────────────
+    # ── Long Poll — il canale principale ─────────────────
 
-    def listen(self, callback: Callable[[dict], None], interval: float = 5.0):
-        """Loop infinito di polling: chiama callback(msg) per ogni messaggio.
+    def _longpoll_request(self):
+        """Esegue una singola richiesta long poll. Restituisce i messaggi o solleva eccezione."""
+        path = "/api/v1/messages/longpoll"
+        url = f"{self.hub_url}{path}"
+        headers = self._sign("GET", path)
+        try:
+            resp = httpx.get(url, headers=headers, timeout=40)  # READ_TIMEOUT
+        except httpx.ConnectTimeout:
+            raise _TransientError("connection_timeout")
+        except httpx.ReadTimeout:
+            raise _TransientError("read_timeout")
+        except httpx.NetworkError:
+            raise _TransientError("network")
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            detail = ""
+            try:
+                detail = e.response.json().get("detail", "")
+            except Exception:
+                pass
+            if code == 429:
+                raise _TransientError("rate_limited")
+            if code == 401 and "timestamp" in detail.lower():
+                raise _TransientError("timestamp_out_of_window")
+            if code == 401:
+                raise _PermanentError("credentials_invalid")
+            if code == 403:
+                raise _PermanentError("blocked_or_forbidden")
+            if code == 404:
+                raise _PermanentError("nickname_not_found")
+            if 500 <= code < 600:
+                raise _TransientError(f"server_error_{code}")
+            raise _TransientError(f"http_{code}")
+        except Exception:
+            raise _TransientError("unknown")
+
+        if resp.status_code == 200:
+            return resp.json().get("messages", [])
+        raise _TransientError(f"unexpected_status_{resp.status_code}")
+
+    def listen(self, callback: Callable[[dict], None],
+               interval=None, recovery_interval: int = 180):
+        """Loop di ascolto via long poll con recovery interleaved.
+
+        Cadenze dalla spec Fase 1: hold 30s, jitter 0-500ms,
+        backoff 1s→60s cap, recovery ogni 6 cicli.
 
         Args:
-            callback: funzione chiamata per ogni messaggio.
-                      Riceve un dict con: message_id, from, thread_id,
-                      intent, content, metadata, created_at.
-            interval: secondi tra un poll e l'altro (default: 5).
+            callback: chiamata per ogni messaggio ricevuto.
+            interval: DEPRECATO — ignorato. Mantenuto per retrocompatibilità.
+            recovery_interval: opzionale, secondi tra un recovery poll e l'altro
+                               (default 180s dalla spec).
         """
-        print(f"[{self.nickname}] In ascolto (polling ogni {interval}s)...")
+        if interval is not None:
+            import warnings
+            warnings.warn(
+                "listen(): 'interval' è deprecato. Le cadenze usano i "
+                "default della spec (long poll 30s). Usa 'recovery_interval' "
+                "se vuoi cambiare la cadenza del recovery poll.",
+                DeprecationWarning, stacklevel=2,
+            )
+
+        HOLD = 30
+        RECOVERY_CYCLES = max(1, recovery_interval // HOLD)  # ~6 con default 180
+        RECONNECT_JITTER = 0.5
+        BACKOFF_BASE = 1.0
+        BACKOFF_FACTOR = 2
+        BACKOFF_CAP = 60.0
+        BACKOFF_JITTER = 0.25
+
+        # Dedup: finestra scorrevole degli ultimi N message_id già consegnati
+        delivered_ids: set[str] = set()
+        _DEDUP_MAX = 500  # tiene ultimi 500, scala a O(1)
+
+        backoff_attempts = 0
+
+        print(f"[{self.nickname}] Long poll attivo (hold={HOLD}s, recovery ogni {RECOVERY_CYCLES} cicli)")
+
+        # Recovery poll iniziale (drena messaggi pregressi)
+        try:
+            for msg in self.get_unread():
+                if msg["message_id"] not in delivered_ids:
+                    delivered_ids.add(msg["message_id"])
+                    if len(delivered_ids) > _DEDUP_MAX:
+                        delivered_ids.clear()  # reset finestra
+                    self._safe_callback(callback, msg)
+        except Exception as e:
+            print(f"[{self.nickname}] Recovery iniziale fallito: {e}")
+        time.sleep(random.uniform(0, RECONNECT_JITTER))
+
+        cycle_count = 0
         while True:
+            # Recovery poll interleaved
+            cycle_count += 1
+            if cycle_count % RECOVERY_CYCLES == 0:
+                try:
+                    for msg in self.get_unread():
+                        if msg["message_id"] not in delivered_ids:
+                            delivered_ids.add(msg["message_id"])
+                            if len(delivered_ids) > _DEDUP_MAX:
+                                delivered_ids.clear()
+                            self._safe_callback(callback, msg)
+                except Exception as e:
+                    print(f"[{self.nickname}] Recovery poll err: {e}")
+
+            # Long poll
             try:
-                messages = self.get_unread()
+                messages = self._longpoll_request()
+                backoff_attempts = 0  # reset al successo
                 for msg in messages:
-                    callback(msg)
+                    if msg["message_id"] not in delivered_ids:
+                        delivered_ids.add(msg["message_id"])
+                        if len(delivered_ids) > _DEDUP_MAX:
+                            delivered_ids.clear()
+                        self._safe_callback(callback, msg)
+                time.sleep(random.uniform(0, RECONNECT_JITTER))
+
+            except _PermanentError as e:
+                print(f"[{self.nickname}] ERRORE PERMANENTE: {e} — arresto.")
+                break
+
+            except _TransientError as e:
+                backoff_attempts += 1
+                base = BACKOFF_BASE * (BACKOFF_FACTOR ** (backoff_attempts - 1))
+                wait = min(base, BACKOFF_CAP)
+                jitter = wait * BACKOFF_JITTER * random.uniform(-1, 1)
+                wait = max(0, wait + jitter)
+                print(f"[{self.nickname}] Errore transitorio ({e}), "
+                      f"tentativo #{backoff_attempts}, attendo {wait:.1f}s")
+                time.sleep(wait)
+
             except Exception as e:
-                print(f"[{self.nickname}] Errore poll: {e}")
-            time.sleep(interval)
+                print(f"[{self.nickname}] Errore inatteso: {e} — backoff")
+                backoff_attempts += 1
+                time.sleep(min(BACKOFF_BASE * backoff_attempts, BACKOFF_CAP))
+
+    # ── Polling manuale (rete di sicurezza, usato dal recovery) ──
+
+    def get_unread(self) -> list[dict]:
+        """Recupera i messaggi non ancora consegnati (GET /messages/unread).
+
+        Usato internamente dal recovery poll e disponibile per polling manuale.
+        """
+        resp = self._request("GET", "/api/v1/messages/unread")
+        if resp.status_code != 200:
+            self._raise_error(resp)
+        return resp.json().get("messages", [])
+
+    @staticmethod
+    def _safe_callback(callback, msg):
+        """Chiama il callback proteggendo da eccezioni utente."""
+        try:
+            callback(msg)
+        except Exception as e:
+            print(f"[callback] eccezione utente: {e}")
 
     # ── Errori ─────────────────────────────────────────
 
