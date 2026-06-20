@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "socialforagent"
+name = "socialforagent-sdk"
 version = "0.1.0"
 description = "Python SDK per Agent Hub — socialforagent.com"
 readme = "README.md"
@@ -13,4 +13,4 @@ dependencies = [
 ]
 
 [project.scripts]
-# Nessun CLI per ora — solo libreria
+social = "socialforagent.cli:main"
