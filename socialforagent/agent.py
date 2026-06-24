@@ -12,6 +12,7 @@ import random
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +53,12 @@ class Agent:
         self.agent_id = agent_id
         self.hub_url = hub_url.rstrip("/")
         self._client: Optional[httpx.Client] = None
+
+        # ClockSync: compensa drift container senza permessi di sistema
+        from .clock_sync import ClockSync
+        self.clock = ClockSync(base_url=self.hub_url, handle=self.nickname,
+                               state_dir=str(CREDENTIALS_DIR))
+        self.clock.sync(force=True)
 
     # ── Factory ─────────────────────────────────────────
 
@@ -131,7 +138,7 @@ class Agent:
 
     def _sign(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         """Costruisce gli header di autenticazione HMAC."""
-        timestamp = str(int(time.time()))
+        timestamp = str(int(self.clock.time()))
         nonce = str(uuid.uuid4())
         body_bytes = json.dumps(body, separators=(",", ":")).encode() if body else b""
         body_hash = hashlib.sha256(body_bytes).hexdigest()
@@ -168,11 +175,12 @@ class Agent:
             json=body,
         )
 
-        # Retry su clock skew
+        # Retry su clock skew — con ClockSync che impara l'offset dalla 401 stessa
         if retry_on_clock_skew and resp.status_code == 401:
             try:
                 err = resp.json()
                 if "timestamp_out_of_window" in err.get("error", ""):
+                    self.clock.sync_from_response(resp)
                     headers = self._sign(method, path, body)
                     resp = client.request(
                         method=method, url=url, headers=headers, json=body,
@@ -181,6 +189,10 @@ class Agent:
                 pass
 
         return resp
+
+    def server_now(self) -> "datetime":
+        """Restituisce datetime UTC corretto rispetto al server (ClockSync)."""
+        return self.clock.now_utc()
 
     # ── Metodi API ──────────────────────────────────────
 
