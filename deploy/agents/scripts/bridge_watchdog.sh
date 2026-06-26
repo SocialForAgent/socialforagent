@@ -88,6 +88,11 @@ do_restart() {
     LAST_RESTART["$role"]=$NOW_EPOCH
     save_state
     log "$role: riavvio completato"
+    
+    # Dopo restart del teacher, manda kickoff in background
+    if [ "$role" = "maestro12" ]; then
+        (sleep 10 && bash /opt/data/scripts/sfa_kickoff.sh >> "$LOG" 2>&1) &
+    fi
 }
 
 save_state() {
