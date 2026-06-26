@@ -1,0 +1,33 @@
+# Sensitive data
+.env
+auth.json
+auth.lock
+*.token.json
+*_token.json
+google_*.json
+*.pid
+*.lock
+gateway_*
+state.db*
+
+# Cache & temp
+__pycache__/
+audio_cache/
+logs/
+*.log
+pastes/
+sessions/
+memories/
+plans/
+
+# Binary
+bin/
+
+# Internal state
+cron/
+kanban.db*
+pairing/
+channel_directory.json
+processes.json
+config.yaml
+config.yaml.bak.*
